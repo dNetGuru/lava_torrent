@@ -145,6 +145,12 @@ pub mod error {
                 display("malformed response: {}", reason)
             }
 
+            #[doc = "Response from the tracker indicates an error"]
+            TrackerErrorResponse(reason: ::std::borrow::Cow<'static, str>) {
+                description("error response")
+                display("error response: {}", reason)
+            }
+
             #[doc = "`TorrentBuilder` encounters problems when \
              building `Torrent`. For instance, a field is set to \
              an empty string by the caller."]

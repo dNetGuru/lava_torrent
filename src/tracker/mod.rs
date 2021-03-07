@@ -41,32 +41,26 @@ pub struct Peer {
 /// Unknown/extension fields will be placed in `extra_fields`. If you
 /// need any of those extra fields you would have to parse it yourself.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TrackerResponse {
-    Success {
-        /// The number of seconds the downloader should wait between
-        /// regular requests.
-        interval: Integer,
-        /// A list of dictionaries corresponding to `Peer`.
-        peers: Vec<Peer>,
-        /// Warning message.
-        warning: Option<String>,
-        /// Minimum announce interval. If present clients must not
-        /// reannounce more frequently than this.
-        min_interval: Option<Integer>,
-        /// A string that the client should send back on its next
-        /// announcements.
-        tracker_id: Option<String>,
-        /// Number of peers with the entire file, i.e. seeders.
-        complete: Option<Integer>,
-        /// Number of non-seeder peers, i.e. leechers.
-        incomplete: Option<Integer>,
-        /// Fields not listed above.
-        extra_fields: Option<Dictionary>,
-    },
-    Failure {
-        /// Error message.
-        reason: String,
-    },
+pub struct TrackerResponse {
+    /// The number of seconds the downloader should wait between
+    /// regular requests.
+    pub interval: Integer,
+    /// A list of dictionaries corresponding to `Peer`.
+    pub peers: Vec<Peer>,
+    /// Warning message.
+    pub warning: Option<String>,
+    /// Minimum announce interval. If present clients must not
+    /// re-announce more frequently than this.
+    pub min_interval: Option<Integer>,
+    /// A string that the client should send back on its next
+    /// announcements.
+    pub tracker_id: Option<String>,
+    /// Number of peers with the entire file, i.e. seeders.
+    pub complete: Option<Integer>,
+    /// Number of non-seeder peers, i.e. leechers.
+    pub incomplete: Option<Integer>,
+    /// Fields not listed above.
+    pub extra_fields: Option<Dictionary>,
 }
 
 /// Swarm metadata returned in a tracker scrape response.
@@ -158,15 +152,12 @@ impl Peer {
     ///
     /// `bytes` must contain exactly 6 bytes.
     fn from_bytes<B>(bytes: B) -> Peer
-    where
-        B: AsRef<[u8]>,
+        where
+            B: AsRef<[u8]>,
     {
         let bytes = bytes.as_ref();
         if bytes.len() != 6 {
-            panic!(format!(
-                "Peer::from_bytes() expects 6 bytes, {} received.",
-                bytes.len()
-            ))
+            panic!("Peer::from_bytes() expects 6 bytes, {} received.", bytes.len())
         }
 
         let ip = Ipv4Addr::from(u32::from_be_bytes(bytes[..4].try_into().unwrap()));
@@ -186,8 +177,8 @@ impl TrackerResponse {
     /// If `bytes` is missing any required field (e.g. `interval`), or if any other
     /// error is encountered (e.g. `IOError`), then `Err(error)` will be returned.
     pub fn from_bytes<B>(bytes: B) -> Result<TrackerResponse>
-    where
-        B: AsRef<[u8]>,
+        where
+            B: AsRef<[u8]>,
     {
         let mut parsed = BencodeElem::from_bytes(bytes)?;
         if parsed.len() != 1 {
@@ -196,6 +187,7 @@ impl TrackerResponse {
                 parsed.len()
             ))));
         }
+
         let mut parsed = match parsed.remove(0) {
             BencodeElem::Dictionary(dict) => dict,
             _ => bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
@@ -204,7 +196,7 @@ impl TrackerResponse {
         };
 
         match parsed.remove("failure reason") {
-            Some(BencodeElem::String(reason)) => return Ok(TrackerResponse::Failure { reason }),
+            Some(BencodeElem::String(reason)) => bail!(ErrorKind::TrackerErrorResponse(Cow::Owned(reason))),
             Some(_) => bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
                 r#""failure reason" does not map to a string (or maps to invalid UTF8)."#
             ))),
@@ -220,9 +212,11 @@ impl TrackerResponse {
                 r#""interval" does not exist."#
             ))),
         };
+
         let peers = match parsed.remove("peers") {
             Some(BencodeElem::List(list)) => Self::extract_peers_from_list(list)?,
-            Some(BencodeElem::Bytes(bytes)) => Self::extract_peers_from_bytes(bytes)?,
+            Some(BencodeElem::Bytes(bytes)) => Self::extract_peers_from_bytes(bytes.as_ref())?,
+            Some(BencodeElem::String(str)) => Self::extract_peers_from_bytes(str.as_bytes())?,
             Some(_) => bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
                 r#""peers" does not map to a dict or a string of bytes."#
             ))),
@@ -230,6 +224,7 @@ impl TrackerResponse {
                 r#""peers" does not exist."#
             ))),
         };
+
         let warning = match parsed.remove("warning") {
             Some(BencodeElem::String(warning)) => Some(warning),
             Some(_) => bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
@@ -237,6 +232,7 @@ impl TrackerResponse {
             ))),
             None => None,
         };
+
         let min_interval = match parsed.remove("min interval") {
             Some(BencodeElem::Integer(min_interval)) => Some(min_interval),
             Some(_) => bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
@@ -244,6 +240,7 @@ impl TrackerResponse {
             ))),
             None => None,
         };
+
         let tracker_id = match parsed.remove("tracker id") {
             Some(BencodeElem::String(tracker_id)) => Some(tracker_id),
             Some(_) => bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
@@ -251,6 +248,7 @@ impl TrackerResponse {
             ))),
             None => None,
         };
+
         let complete = match parsed.remove("complete") {
             Some(BencodeElem::Integer(complete)) => Some(complete),
             Some(_) => bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
@@ -265,13 +263,14 @@ impl TrackerResponse {
             ))),
             None => None,
         };
+
         let extra_fields = if parsed.is_empty() {
             None
         } else {
             Some(parsed)
         };
 
-        Ok(TrackerResponse::Success {
+        Ok(TrackerResponse {
             interval,
             peers,
             warning,
@@ -294,7 +293,7 @@ impl TrackerResponse {
             .collect()
     }
 
-    fn extract_peers_from_bytes(bytes: Vec<u8>) -> Result<Vec<Peer>> {
+    fn extract_peers_from_bytes(bytes: &[u8]) -> Result<Vec<Peer>> {
         if (bytes.len() % 6) != 0 {
             bail!(ErrorKind::MalformedResponse(Cow::Borrowed(
                 r#"Compact "peers" contains incorrect number of bytes"#
@@ -360,8 +359,8 @@ impl TrackerScrapeResponse {
     /// If `bytes` is missing any required field (e.g. `files`), or if any other
     /// error is encountered (e.g. `IOError`), then `Err(error)` will be returned.
     pub fn from_bytes<B>(bytes: B) -> Result<TrackerScrapeResponse>
-    where
-        B: AsRef<[u8]>,
+        where
+            B: AsRef<[u8]>,
     {
         let mut parsed = BencodeElem::from_bytes(bytes)?;
         if parsed.len() != 1 {
@@ -434,49 +433,35 @@ impl fmt::Display for Peer {
 
 impl fmt::Display for TrackerResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            TrackerResponse::Success {
-                interval,
-                peers,
-                warning,
-                min_interval,
-                tracker_id,
-                complete,
-                incomplete,
-                extra_fields,
-            } => {
-                writeln!(f, "-interval: {}", interval)?;
-                if let Some(ref min_interval) = min_interval {
-                    writeln!(f, "-min_interval: {}", min_interval)?;
-                }
-                if let Some(ref warning) = warning {
-                    writeln!(f, "-warning: {}", warning)?;
-                }
-                if let Some(ref tracker_id) = tracker_id {
-                    writeln!(f, "-tracker_id: {}", tracker_id)?;
-                }
-                if let Some(ref complete) = complete {
-                    writeln!(f, "-complete: {}", complete)?;
-                }
-                if let Some(ref incomplete) = incomplete {
-                    writeln!(f, "-incomplete: {}", incomplete)?;
-                }
-
-                if let Some(ref fields) = extra_fields {
-                    write!(
-                        f,
-                        "{}",
-                        fields
-                            .iter()
-                            .sorted_by_key(|&(key, _)| key.as_bytes())
-                            .format_with("", |(k, v), f| f(&format_args!("-{}: {}\n", k, v)))
-                    )?;
-                }
-
-                writeln!(f, "-peers ({}):\n{}", peers.len(), peers.iter().format(""))
-            }
-            TrackerResponse::Failure { reason } => writeln!(f, "failure: {}", reason),
+        writeln!(f, "-interval: {}", self.interval)?;
+        if let Some(ref min_interval) = self.min_interval {
+            writeln!(f, "-min_interval: {}", min_interval)?;
         }
+        if let Some(ref warning) = self.warning {
+            writeln!(f, "-warning: {}", warning)?;
+        }
+        if let Some(ref tracker_id) = self.tracker_id {
+            writeln!(f, "-tracker_id: {}", tracker_id)?;
+        }
+        if let Some(ref complete) = self.complete {
+            writeln!(f, "-complete: {}", complete)?;
+        }
+        if let Some(ref incomplete) = self.incomplete {
+            writeln!(f, "-incomplete: {}", incomplete)?;
+        }
+
+        if let Some(ref fields) = self.extra_fields {
+            write!(
+                f,
+                "{}",
+                fields
+                    .iter()
+                    .sorted_by_key(|&(key, _)| key.as_bytes())
+                    .format_with("", |(k, v), f| f(&format_args!("-{}: {}\n", k, v)))
+            )?;
+        }
+
+        writeln!(f, "-peers ({}):\n{}", self.peers.len(), self.peers.iter().format(""))
     }
 }
 
